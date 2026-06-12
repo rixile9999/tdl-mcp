@@ -1,0 +1,201 @@
+name: tdl update
+
+# Watches iyear/tdl releases and keeps this wrapper current.
+#
+# Cheap path (no AI tokens spent): if the contract test passes against the new
+# tdl binary AND the upstream release notes contain no breaking-change markers,
+# open a plain .tdl-version bump PR.
+#
+# AI path: if the contract test fails or breaking markers appear, run Claude
+# Code (Qwen via DashScope's Anthropic-compatible endpoint) to read the release
+# notes, adapt server.js / contract.mjs, get `npm test` green, and open a PR.
+#
+# Repo secrets:
+#   UPDATE_PR_TOKEN   — fine-grained PAT (contents:write + pull-requests:write).
+#                       PRs created with the default GITHUB_TOKEN don't trigger
+#                       CI, so without this secret bump PRs arrive without checks.
+#   DASHSCOPE_API_KEY — Alibaba Cloud Model Studio key (international/Singapore
+#                       region). Only consumed when the AI path actually runs.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC (15:00 KST)
+  workflow_dispatch:
+
+concurrency:
+  group: tdl-update
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: read
+  id-token: write
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.UPDATE_PR_TOKEN || github.token }}
+
+      - name: Compare pinned vs latest tdl release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CURRENT="$(tr -d '[:space:]' < .tdl-version)"
+          LATEST="$(gh api repos/iyear/tdl/releases/latest --jq .tag_name)"
+          echo "CURRENT=$CURRENT" >> "$GITHUB_ENV"
+          echo "LATEST=$LATEST" >> "$GITHUB_ENV"
+          if [ "$CURRENT" = "$LATEST" ]; then
+            echo "UPDATE=false" >> "$GITHUB_ENV"
+            echo "already on $CURRENT — nothing to do"
+          else
+            echo "UPDATE=true" >> "$GITHUB_ENV"
+            echo "update available: $CURRENT -> $LATEST"
+          fi
+
+      - name: Skip if a PR for this version already exists
+        if: env.UPDATE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # --state all: a closed-unmerged PR means the bump was rejected — don't nag weekly.
+          N="$(gh pr list --state all --head "tdl-bump/$LATEST" --json number --jq length)"
+          if [ "$N" -gt 0 ]; then
+            echo "SKIP=true" >> "$GITHUB_ENV"
+            echo "PR for tdl-bump/$LATEST already exists — skipping"
+          else
+            echo "SKIP=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install new tdl and run the contract test against it
+        if: env.UPDATE == 'true' && env.SKIP == 'false'
+        run: |
+          # default Actions bash has no pipefail — without this, `| tee` would
+          # mask a contract failure and the AI escalation path would never fire
+          set -o pipefail
+          TDL_INSTALL_DIR="$RUNNER_TEMP/tdl-new" bash scripts/install-tdl.sh "$LATEST"
+          echo "$RUNNER_TEMP/tdl-new" >> "$GITHUB_PATH"
+          npm ci
+          if TDL_BIN="$RUNNER_TEMP/tdl-new/tdl" npm run contract 2>&1 | tee /tmp/tdl-contract.txt; then
+            echo "CONTRACT_OK=true" >> "$GITHUB_ENV"
+          else
+            echo "CONTRACT_OK=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Collect release notes since the pinned version
+        if: env.UPDATE == 'true' && env.SKIP == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api 'repos/iyear/tdl/releases?per_page=50' > /tmp/releases.json
+          jq -r --arg cur "$CURRENT" '
+            map(select(.draft | not))
+            | (map(.tag_name) | index($cur)) as $i
+            | (if $i == null then . else .[:$i] end)
+            | map("## " + .tag_name + " (" + ((.published_at // "")[:10]) + ")\n\n" + (.body // ""))
+            | join("\n\n---\n\n")
+          ' /tmp/releases.json | head -c 60000 > /tmp/tdl-release-notes.md
+          # Historical breaking-change markers used by tdl: a hand-written
+          # "BREAKING CHANGES" heading, "(CLI BREAK)", or bang conventional
+          # commits like feat!(export).
+          if grep -qiE 'BREAKING|CLI BREAK' /tmp/tdl-release-notes.md \
+            || grep -qE '\b(feat|fix|refactor|perf|chore)!\(' /tmp/tdl-release-notes.md; then
+            MARKERS=true
+          else
+            MARKERS=false
+          fi
+          echo "MARKERS=$MARKERS" >> "$GITHUB_ENV"
+          if [ "$CONTRACT_OK" = "true" ] && [ "$MARKERS" = "false" ]; then
+            echo "NEEDS_AI=false" >> "$GITHUB_ENV"
+          else
+            echo "NEEDS_AI=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Open version-bump PR (cheap path)
+        if: env.UPDATE == 'true' && env.SKIP == 'false' && env.NEEDS_AI == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.UPDATE_PR_TOKEN || github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="tdl-bump/$LATEST"
+          git checkout -b "$BRANCH"
+          printf '%s\n' "$LATEST" > .tdl-version
+          git add .tdl-version
+          git commit -m "chore: bump tdl to $LATEST"
+          git push -f origin "$BRANCH"
+          {
+            echo "Automated tdl bump: \`$CURRENT\` → \`$LATEST\`."
+            echo
+            echo "- contract test against \`$LATEST\`: **pass**"
+            echo "- breaking-change markers in upstream release notes: **none found**"
+            echo
+            echo "<details><summary>Upstream release notes</summary>"
+            echo
+            cat /tmp/tdl-release-notes.md
+            echo
+            echo "</details>"
+          } > /tmp/pr-body.md
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore: bump tdl to $LATEST" \
+            --body-file /tmp/pr-body.md
+
+      - name: AI-assisted upgrade via DashScope/Qwen (escalation path)
+        if: env.UPDATE == 'true' && env.SKIP == 'false' && env.NEEDS_AI == 'true'
+        uses: anthropics/claude-code-action@v1
+        env:
+          # Forwarded to the Claude Code process by the action (see its action.yml).
+          ANTHROPIC_BASE_URL: https://dashscope-intl.aliyuncs.com/apps/anthropic
+          ANTHROPIC_DEFAULT_OPUS_MODEL: qwen3.5-plus
+          ANTHROPIC_DEFAULT_SONNET_MODEL: qwen3.5-plus
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: qwen3.5-flash
+          GH_TOKEN: ${{ secrets.UPDATE_PR_TOKEN || github.token }}
+        with:
+          # DashScope key is sent as X-Api-Key, which /apps/anthropic accepts.
+          anthropic_api_key: ${{ secrets.DASHSCOPE_API_KEY }}
+          github_token: ${{ secrets.UPDATE_PR_TOKEN || github.token }}
+          settings: |
+            {"env": {"CLAUDE_CODE_SUBAGENT_MODEL": "qwen3.5-plus"}}
+          claude_args: |
+            --model qwen3.5-plus
+            --allowedTools Bash,Edit,Read,Write,Glob,Grep
+          prompt: |
+            A new tdl release needs review before this repo can adopt it:
+            ${{ env.CURRENT }} -> ${{ env.LATEST }}.
+
+            This repository (tdl-mcp) is a read-only MCP server that shells out
+            to the tdl CLI from server.js. The pinned, CI-tested tdl release
+            lives in .tdl-version. Automated checks already ran against the new
+            binary, which is installed on PATH:
+
+            - contract test (scripts/contract.mjs) result: ${{ env.CONTRACT_OK == 'true' && 'PASS' || 'FAIL' }}
+              (full output: /tmp/tdl-contract.txt)
+            - upstream release notes since ${{ env.CURRENT }}: /tmp/tdl-release-notes.md
+              (breaking-change markers detected: ${{ env.MARKERS }})
+
+            Your job:
+            1. Read both files. Identify any changes affecting the CLI surface
+               server.js uses — `chat ls -o json`, `chat export -c/-T/-i/-o/--with-content`,
+               `dl -f/-u/-i/-d/--skip-same`, global `-n` — or the export JSON
+               shape ({messages:[{id,date,file,text}]}).
+            2. Minimally adapt server.js and/or scripts/contract.mjs to stay
+               compatible. The server must remain strictly read-only — never add
+               code paths that send, edit, delete, or log in.
+            3. Update .tdl-version to ${{ env.LATEST }}. If user-visible behavior
+               changed, add a note to CHANGELOG.md under an "Unreleased" heading.
+            4. Run `npm test` and iterate until it passes.
+            5. Create branch tdl-bump/${{ env.LATEST }}, commit, push it, and open
+               a PR with `gh pr create --base main` titled
+               "chore: bump tdl to ${{ env.LATEST }}". In the PR body summarize the
+               upstream changes, what you changed and why, and paste the test output.
+
+            If you conclude the new tdl release cannot be safely supported (for
+            example a flag the server needs was removed with no replacement),
+            do NOT open a PR — instead open an issue with
+            `gh issue create` titled "tdl ${{ env.LATEST }} breaks the wrapper"
+            describing exactly what broke and the options you see.

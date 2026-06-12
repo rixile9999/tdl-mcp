@@ -1,0 +1,81 @@
+name: Release
+
+# Tag-driven release: push a tag like v1.2.3 (matching package.json's version)
+# to publish to npm, create a GitHub release, and update the MCP Registry.
+#
+# Required repo secret:
+#   NPM_TOKEN — npm automation token with publish rights for `tdl-mcp`
+# The MCP Registry step needs no secret: it authenticates via GitHub OIDC.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub release
+  id-token: write # OIDC login for mcp-publisher
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify tag matches package.json version
+        run: |
+          PKG_VERSION="$(node -p 'require("./package.json").version')"
+          if [ "v$PKG_VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME != package.json v$PKG_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install pinned tdl
+        run: |
+          TDL_INSTALL_DIR="$RUNNER_TEMP/tdl-bin" bash scripts/install-tdl.sh
+          echo "$RUNNER_TEMP/tdl-bin" >> "$GITHUB_PATH"
+
+      - name: Test
+        run: npm test
+
+      - name: Publish to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub release
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Install mcp-publisher
+        run: |
+          URL="$(gh api repos/modelcontextprotocol/registry/releases/latest \
+            --jq '.assets[] | select(.name | test("linux_amd64.tar.gz$")) | .browser_download_url')"
+          curl -fsSL --retry 3 -o /tmp/mcp-publisher.tar.gz "$URL"
+          tar -xzf /tmp/mcp-publisher.tar.gz -C /tmp mcp-publisher
+          sudo install -m 0755 /tmp/mcp-publisher /usr/local/bin/mcp-publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Publish to MCP Registry
+        run: |
+          # server.json's version fields track package.json at publish time.
+          PKG_VERSION="$(node -p 'require("./package.json").version')"
+          node -e '
+            const fs = require("fs");
+            const s = JSON.parse(fs.readFileSync("server.json", "utf8"));
+            const v = process.argv[1];
+            s.version = v;
+            for (const p of s.packages || []) p.version = v;
+            fs.writeFileSync("server.json", JSON.stringify(s, null, 2) + "\n");
+          ' "$PKG_VERSION"
+          mcp-publisher login github-oidc
+          mcp-publisher publish

@@ -1,0 +1,47 @@
+{
+  "name": "tdl-mcp",
+  "version": "1.0.0",
+  "description": "Read-only Telegram MCP server wrapping the tdl CLI — list chats, read recent messages, download media. Never sends.",
+  "type": "module",
+  "main": "server.js",
+  "bin": {
+    "tdl-mcp": "server.js"
+  },
+  "mcpName": "io.github.rixile9999/tdl-mcp",
+  "files": [
+    "server.js"
+  ],
+  "scripts": {
+    "start": "node server.js",
+    "smoke": "node scripts/smoke.mjs",
+    "contract": "node scripts/contract.mjs",
+    "test": "npm run smoke && npm run contract"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rixile9999/tdl-mcp.git"
+  },
+  "homepage": "https://github.com/rixile9999/tdl-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/rixile9999/tdl-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "telegram",
+    "tdl",
+    "claude",
+    "download",
+    "read-only"
+  ],
+  "author": "rixile9999",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.25.0"
+  }
+}

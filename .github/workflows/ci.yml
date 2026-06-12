@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install pinned tdl
+        run: |
+          TDL_INSTALL_DIR="$RUNNER_TEMP/tdl-bin" bash scripts/install-tdl.sh
+          echo "$RUNNER_TEMP/tdl-bin" >> "$GITHUB_PATH"
+
+      - name: Smoke test (MCP protocol, login-free)
+        run: npm run smoke
+
+      - name: Contract test (tdl CLI surface)
+        run: npm run contract
