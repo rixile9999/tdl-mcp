@@ -67,7 +67,7 @@ tdl login -T qr
 
 ### 3. MCP 호스트에 서버 등록
 
-Node.js 18 이상이 필요합니다.
+Node.js 22 이상이 필요합니다.
 
 **Claude Code:**
 

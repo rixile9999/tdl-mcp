@@ -6,8 +6,8 @@ Everything a maintainer needs to operate this repo. Users never need this file.
 
 | Secret | Used by | What it is |
 | --- | --- | --- |
-| `NPM_TOKEN` | `release.yml` | npm **automation** token (npmjs.com → Access Tokens) with publish rights for `tdl-mcp`. |
-| `UPDATE_PR_TOKEN` | `tdl-update.yml` | Fine-grained PAT scoped to this repo with **Contents: read/write** and **Pull requests: read/write**. Needed because PRs created with the default `GITHUB_TOKEN` [don't trigger CI](https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow). Without it the workflow still opens PRs — they just arrive with no checks. |
+| `NPM_TOKEN` | `release.yml` (bootstrap only) | npm **granular** access token with read/write package access and **Bypass 2FA** enabled, used only until trusted publishing is configured (see [npm publishing](#npm-publishing)). Delete it afterwards. |
+| `UPDATE_PR_TOKEN` | `tdl-update.yml` | Fine-grained PAT scoped to this repo with **Contents**, **Pull requests** and **Issues: read/write** (Issues is for the AI path's "can't support this release" issue). Without it the workflow falls back to `GITHUB_TOKEN`, which fails to open PRs unless *Settings → Actions → General → Allow GitHub Actions to create and approve pull requests* is on — and even then those PRs [don't trigger CI](https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow). |
 | `DASHSCOPE_API_KEY` | `tdl-update.yml` (AI path only) | Alibaba Cloud Model Studio API key. Must be an **international-mode key created in the Singapore region** ([console](https://modelstudio.console.alibabacloud.com/?tab=playground#/api-key), [docs](https://www.alibabacloud.com/help/en/model-studio/get-api-key)). Spent only when a tdl release fails the contract test or carries breaking markers. |
 
 ## Releasing a version
@@ -21,9 +21,36 @@ Everything a maintainer needs to operate this repo. Users never need this file.
 
 3. `release.yml` takes it from there: verifies the tag matches
    `package.json`, runs the full test suite against the pinned tdl, publishes
-   to npm (`NPM_TOKEN`), creates the GitHub release, and republishes
+   to npm (with provenance), creates the GitHub release, and republishes
    `server.json` to the official MCP Registry via `mcp-publisher` using
    GitHub **OIDC** — no registry credentials are stored anywhere.
+   Re-running a failed release is safe: the npm and GitHub release steps
+   skip themselves if that version already exists.
+
+### npm publishing
+
+npm revoked classic tokens in December 2025, and write-enabled granular
+tokens now expire after at most 90 days, so a stored `NPM_TOKEN` is only a
+bootstrap. The steady state is **trusted publishing** (GitHub OIDC, no
+secret):
+
+1. **First publish only:** create a granular token (npmjs.com → Access
+   Tokens → Generate New Token; Packages and scopes: Read and write, All
+   packages; Bypass 2FA checked; short expiry) and store it as `NPM_TOKEN`.
+   Trusted publishing can't be configured until the package exists.
+2. Push the release tag. `release.yml` publishes with the token.
+3. Right after it succeeds, delete the `NPM_TOKEN` secret and revoke the
+   token — nothing needs it until the next release.
+4. **Before the next release** (same day you tag it): npmjs.com → `tdl-mcp`
+   → Settings → **Trusted Publisher** → GitHub Actions: user `rixile9999`,
+   repository `tdl-mcp`, workflow `release.yml`, no environment, and allow
+   `npm publish`. A new configuration must see a successful publish within
+   2 days or it expires (delete and recreate it if that happens). Once that
+   release publishes, set Publishing access to *Require two-factor
+   authentication and disallow tokens*.
+
+`release.yml` needs no change between these phases: npm tries OIDC first and
+falls back to `NODE_AUTH_TOKEN` only when no trusted publisher matches.
 
 The registry name is `io.github.rixile9999/tdl-mcp`; GitHub OIDC automatically
 grants publish rights for the `io.github.rixile9999/*` namespace, and npm

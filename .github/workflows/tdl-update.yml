@@ -11,9 +11,10 @@ name: tdl update
 # notes, adapt server.js / contract.mjs, get `npm test` green, and open a PR.
 #
 # Repo secrets:
-#   UPDATE_PR_TOKEN   — fine-grained PAT (contents:write + pull-requests:write).
-#                       PRs created with the default GITHUB_TOKEN don't trigger
-#                       CI, so without this secret bump PRs arrive without checks.
+#   UPDATE_PR_TOKEN   — fine-grained PAT (contents, pull-requests, issues: write).
+#                       Without it the default GITHUB_TOKEN is used, which can
+#                       only open PRs if the repo allows Actions to create PRs —
+#                       and those PRs don't trigger CI.
 #   DASHSCOPE_API_KEY — Alibaba Cloud Model Studio key (international/Singapore
 #                       region). Only consumed when the AI path actually runs.
 
@@ -38,9 +39,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           token: ${{ secrets.UPDATE_PR_TOKEN || github.token }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
 
       - name: Compare pinned vs latest tdl release
         env:

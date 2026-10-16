@@ -542,4 +542,4 @@ server.registerTool(
 const transport = new StdioServerTransport();
 await server.connect(transport);
 // stdout is the MCP protocol channel — log to stderr only.
-console.error(`telegram-mcp ready (tdl: ${TDL_BIN})`);
+console.error(`tdl-mcp ready (tdl: ${TDL_BIN})`);
