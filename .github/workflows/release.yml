@@ -98,5 +98,12 @@ jobs:
             for (const p of s.packages || []) p.version = v;
             fs.writeFileSync("server.json", JSON.stringify(s, null, 2) + "\n");
           ' "$PKG_VERSION"
+          # The registry verifies mcpName against the published npm package,
+          # so wait until a fresh publish is actually visible.
+          for i in $(seq 1 12); do
+            npm view "tdl-mcp@$PKG_VERSION" mcpName > /dev/null 2>&1 && break
+            echo "waiting for tdl-mcp@$PKG_VERSION on npm ($i/12)"
+            sleep 10
+          done
           mcp-publisher login github-oidc
           mcp-publisher publish

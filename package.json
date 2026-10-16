@@ -11,6 +11,9 @@
   "files": [
     "server.js"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "start": "node server.js",
     "smoke": "node scripts/smoke.mjs",
