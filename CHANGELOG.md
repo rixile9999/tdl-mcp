@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 — 2026-10-16
 
+First version published to npm and the MCP Registry (1.0.0 is listed here
+but never published).
+
+- Tested against tdl v0.20.4 (pinned in `.tdl-version`).
 - **Requires Node.js 22 or later** (Node 18 and 20 are end-of-life). CI now
   runs on Node 22/24/26.
 - `@modelcontextprotocol/sdk` 1.29.0 → 1.32.1 and `zod` 3 → 4. `npm audit`

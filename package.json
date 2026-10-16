@@ -1,6 +1,6 @@
 {
   "name": "tdl-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Read-only Telegram MCP server wrapping the tdl CLI — list chats, read recent messages, download media. Never sends.",
   "type": "module",
   "main": "server.js",
