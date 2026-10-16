@@ -70,7 +70,7 @@ once. `tdl-mcp` itself never performs or refreshes logins.
 
 ### 3. Add the server to your MCP host
 
-You need Node.js ≥ 18.
+You need Node.js ≥ 22.
 
 **Claude Code:**
 

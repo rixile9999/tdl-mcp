@@ -3,9 +3,13 @@ name: Release
 # Tag-driven release: push a tag like v1.2.3 (matching package.json's version)
 # to publish to npm, create a GitHub release, and update the MCP Registry.
 #
-# Required repo secret:
-#   NPM_TOKEN — npm automation token with publish rights for `tdl-mcp`
+# npm auth: trusted publishing (GitHub OIDC) once it is configured on
+# npmjs.com — no secret needed. Until then (the very first publish), the
+# NPM_TOKEN repo secret is used as a fallback. See docs/MAINTENANCE.md.
 # The MCP Registry step needs no secret: it authenticates via GitHub OIDC.
+#
+# Re-running a failed release is safe: the npm publish and GitHub release
+# steps skip themselves when that version/release already exists.
 
 on:
   push:
@@ -13,18 +17,26 @@ on:
 
 permissions:
   contents: write # create the GitHub release
-  id-token: write # OIDC login for mcp-publisher
+  id-token: write # OIDC for npm trusted publishing, provenance and mcp-publisher
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           registry-url: https://registry.npmjs.org
+
+      - name: Ensure npm supports trusted publishing (>= 11.5.1)
+        run: |
+          node -e '
+            const [a, b, c] = process.argv[1].split(".").map(Number);
+            process.exit(a > 11 || (a === 11 && (b > 5 || (b === 5 && c >= 1))) ? 0 : 1);
+          ' "$(npm --version)" || npm install -g npm@^11.5.1
+          echo "npm $(npm --version)"
 
       - name: Verify tag matches package.json version
         run: |
@@ -46,24 +58,33 @@ jobs:
         run: npm test
 
       - name: Publish to npm
-        run: npm publish
+        run: |
+          SPEC="$(node -p 'require("./package.json").name')@${GITHUB_REF_NAME#v}"
+          if npm view "$SPEC" version > /dev/null 2>&1; then
+            echo "$SPEC is already on npm — skipping publish"
+          else
+            npm publish
+          fi
         env:
+          # npm tries OIDC trusted publishing first and falls back to this token.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
 
       - name: Create GitHub release
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Install mcp-publisher
         run: |
-          URL="$(gh api repos/modelcontextprotocol/registry/releases/latest \
-            --jq '.assets[] | select(.name | test("linux_amd64.tar.gz$")) | .browser_download_url')"
-          curl -fsSL --retry 3 -o /tmp/mcp-publisher.tar.gz "$URL"
+          # Direct asset URL: the release also ships registry_linux_amd64.tar.gz,
+          # so pattern-matching the asset list picks up two URLs.
+          curl -fsSL --retry 3 -o /tmp/mcp-publisher.tar.gz \
+            https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz
           tar -xzf /tmp/mcp-publisher.tar.gz -C /tmp mcp-publisher
           sudo install -m 0755 /tmp/mcp-publisher /usr/local/bin/mcp-publisher
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - name: Publish to MCP Registry
         run: |

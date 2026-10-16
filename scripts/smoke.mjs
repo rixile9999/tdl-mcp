@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Smoke test for telegram-mcp.
+ * Smoke test for tdl-mcp.
  *
  * Spawns ./server.js over stdio with the SDK Client and checks:
  *   1. tools/list exposes exactly the 5 expected tools
