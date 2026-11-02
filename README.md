@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/rixile9999-tdl-mcp-badge.png)](https://mseep.ai/app/rixile9999-tdl-mcp)
+
 # tdl-mcp
 
 [![CI](https://github.com/rixile9999/tdl-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/rixile9999/tdl-mcp/actions/workflows/ci.yml)
